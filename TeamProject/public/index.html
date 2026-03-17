@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CampusHub</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 800px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+      .note {
+        border: 1px solid #ccc;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+        border-radius: 4px;
+      }
+      .note-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      textarea {
+        width: 100%;
+        min-height: 80px;
+      }
+      button {
+        margin: 0.25rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>CampusHub</h1>
+        <p id="user-info">Not logged in</p>
+      </div>
+      <div id="auth-controls">
+        <a href="/auth/google">
+          <button>Login with Google</button>
+        </a>
+      </div>
+    </header>
+
+    <section id="app" style="display: none">
+      <h2>Your Notes</h2>
+      <form id="new-note-form">
+        <input type="text" id="new-title" placeholder="Title" required />
+        <br />
+        <textarea id="new-body" placeholder="Note contents" required></textarea>
+        <br />
+        <button type="submit">Add Note</button>
+      </form>
+      <hr />
+      <div id="notes"></div>
+    </section>
+
+    <script>
+      let csrfToken = null;
+
+      async function fetchJson(url, options = {}) {
+        const res = await fetch(url, {
+          credentials: "include", // <--- IMPORTANT: send cookies
+          ...options,
+        });
+
+        if (res.status === 401) {
+          console.log("Got 401 from", url);
+          document.getElementById("app").style.display = "none";
+          document.getElementById("auth-controls").innerHTML = `
+        <a href="/auth/google"><button>Login with Google</button></a>`;
+          document.getElementById("user-info").innerText = "Not logged in";
+          throw new Error("Unauthorized");
+        }
+
+        const data = await res.json().catch(() => ({}));
+        return data;
+      }
+
+      async function init() {
+        console.log("init() running…");
+        try {
+          const me = await fetchJson("/me");
+          console.log("ME:", me);
+          document.getElementById(
+            "user-info"
+          ).innerText = `Logged in as ${me.user.email}`;
+          document.getElementById("auth-controls").innerHTML = `
+        <button id="logout-btn">Logout</button>
+      `;
+          document.getElementById("logout-btn").onclick = logout;
+          document.getElementById("app").style.display = "block";
+
+          const csrf = await fetchJson("/csrf");
+          csrfToken = csrf.csrfToken;
+          console.log("CSRF token:", csrfToken);
+
+          await loadNotes();
+        } catch (err) {
+          console.log("Not logged in or error in init():", err.message);
+        }
+      }
+
+      async function loadNotes() {
+        const notes = await fetchJson("/api/notes");
+        const container = document.getElementById("notes");
+        container.innerHTML = "";
+        notes.forEach((n) => {
+          const div = document.createElement("div");
+          div.className = "note";
+          div.innerHTML = `
+        <div class="note-header">
+          <strong>${n.title}</strong>
+          <div>
+            <button data-id="${n.id}" class="edit-btn">Edit</button>
+            <button data-id="${n.id}" class="delete-btn">Delete</button>
+          </div>
+        </div>
+        <pre>${n.body}</pre>
+      `;
+          container.appendChild(div);
+        });
+
+        container.querySelectorAll(".delete-btn").forEach((btn) => {
+          btn.onclick = () => deleteNote(btn.dataset.id);
+        });
+
+        container.querySelectorAll(".edit-btn").forEach((btn) => {
+          btn.onclick = () => editNotePrompt(btn.dataset.id);
+        });
+      }
+
+      async function createNote(title, body) {
+        await fetchJson("/api/notes", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-csrf-token": csrfToken,
+          },
+          body: JSON.stringify({ title, body }),
+        });
+        await loadNotes();
+      }
+
+      async function deleteNote(id) {
+        await fetchJson(`/api/notes/${id}`, {
+          method: "DELETE",
+          headers: {
+            "x-csrf-token": csrfToken,
+          },
+        });
+        await loadNotes();
+      }
+
+      async function editNotePrompt(id) {
+        const newTitle = prompt("New title:");
+        const newBody = prompt("New body:");
+        if (newTitle && newBody) {
+          await fetchJson(`/api/notes/${id}`, {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+              "x-csrf-token": csrfToken,
+            },
+            body: JSON.stringify({ title: newTitle, body: newBody }),
+          });
+          await loadNotes();
+        }
+      }
+
+      async function logout() {
+        await fetchJson("/logout", {
+          method: "POST",
+          headers: {
+            "x-csrf-token": csrfToken,
+          },
+        });
+        location.reload();
+      }
+
+      document
+        .getElementById("new-note-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const title = document.getElementById("new-title").value;
+          const body = document.getElementById("new-body").value;
+          await createNote(title, body);
+          document.getElementById("new-title").value = "";
+          document.getElementById("new-body").value = "";
+        });
+
+      // Run on page load
+      init();
+    </script>
+  </body>
+</html>
